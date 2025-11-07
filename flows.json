@@ -1,0 +1,478 @@
+[
+    {
+        "id": "tab_b31ot_main",
+        "type": "tab",
+        "label": "HWU B31OT Control Room",
+        "disabled": false,
+        "info": "Heriot-Watt University | B31OT IoT Safety & Environment Node\nFull dashboard: Status, Telemetry, Compliance, Control, Trends"
+    },
+    {
+        "id": "mqtt_in_telemetry",
+        "type": "mqtt in",
+        "z": "tab_b31ot_main",
+        "name": "MQTT – ESP32 Telemetry",
+        "topic": "iot/esp32-dht01/telemetry",
+        "qos": "0",
+        "datatype": "json",
+        "broker": "broker_main",
+        "nl": false,
+        "rap": false,
+        "rh": 0,
+        "inputs": 0,
+        "x": 180,
+        "y": 120,
+        "wires": [
+            [
+                "fx_extract",
+                "fx_chartprep",
+                "fx_build_overview",
+                "fx_build_compliance",
+                "fx_build_eventlog"
+            ]
+        ]
+    },
+    {
+        "id": "fx_extract",
+        "type": "function",
+        "z": "tab_b31ot_main",
+        "name": "Extract numeric metrics",
+        "func": "// Extract numeric metrics for gauges (supports both simple and complex payloads)\nlet p = msg.payload || {};\nlet env = p.sensors && p.sensors.environment ? p.sensors.environment : {};\n\n// Primary or fallback values\nlet tempVal = env.temperatureC?.value ?? p.tempC ?? 0;\nlet humVal = env.humidityPct?.value ?? p.hum ?? 0;\nlet dewVal = env.dewPointC?.value ?? p.dewC ?? 0;\n\n// Send one message per gauge output\nreturn [\n    { topic: \"Temperature (°C)\", payload: tempVal },\n    { topic: \"Humidity (%)\", payload: humVal },\n    { topic: \"Dew Point (°C)\", payload: dewVal }\n];\n",
+        "outputs": 3,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 440,
+        "y": 100,
+        "wires": [
+            [
+                "g_temp"
+            ],
+            [
+                "g_hum"
+            ],
+            [
+                "g_dew"
+            ]
+        ],
+        "outputLabels": [
+            "Temp",
+            "Humidity",
+            "Dew Point"
+        ]
+    },
+    {
+        "id": "fx_chartprep",
+        "type": "function",
+        "z": "tab_b31ot_main",
+        "name": "Prep Trend Lines",
+        "func": "// This version pushes simple numeric values for each series.\n// ui_chart will just plot them in arrival order (index on x-axis).\n// No timestamps required for it to render.\n\nlet p = msg.payload || {};\n\n// pull values from your ESP32 JSON\n// (you confirmed these keys exist: tempC, hum, dewC)\nlet t = (p.tempC !== undefined) ? p.tempC : 0;\nlet h = (p.hum !== undefined) ? p.hum : 0;\nlet d = (p.dewC !== undefined) ? p.dewC : 0;\n\n// build one msg per line/series\nlet outTemp = {\n    topic: \"Temp (°C)\",\n    payload: t\n};\n\nlet outHum = {\n    topic: \"Humidity (%)\",\n    payload: h\n};\n\nlet outDew = {\n    topic: \"Dew (°C)\",\n    payload: d\n};\n\n// We MUST return three outputs because this node is configured with 3 outputs\nreturn [outTemp, outHum, outDew];\n",
+        "outputs": 3,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 460,
+        "y": 160,
+        "wires": [
+            [
+                "chart_trend"
+            ],
+            [
+                "chart_trend"
+            ],
+            [
+                "chart_trend"
+            ]
+        ],
+        "outputLabels": [
+            "Trend Analytics",
+            "Trend Analytics",
+            "Trend Analytics"
+        ]
+    },
+    {
+        "id": "fx_build_overview",
+        "type": "function",
+        "z": "tab_b31ot_main",
+        "name": "Build System Overview Text",
+        "func": "// Build the big SYSTEM OVERVIEW block.\n// Handles both complex and simple JSON from ESP32.\n\nlet p = msg.payload || {};\nlet meta = p.meta || {};\nlet env = p.sensors && p.sensors.environment ? p.sensors.environment : {};\nlet run = p.runtime || {};\nlet comp = p.analytics && p.analytics.compliance ? p.analytics.compliance : {};\nlet led = run.led || {};\nlet wifi = run.deviceHealth && run.deviceHealth.wifi ? run.deviceHealth.wifi : {};\n\n// fallback for simple firmware payloads\nlet tempVal = env.temperatureC?.value ?? p.tempC ?? \"-\";\nlet humVal = env.humidityPct?.value ?? p.hum ?? \"-\";\nlet dewVal = env.dewPointC?.value ?? p.dewC ?? \"-\";\n\n// decorate the rest so it looks ‘industrial’\nlet safetyState = comp.autoSafetyState ?? \"SAFE\";\nlet complianceRisk = comp.complianceRisk ?? \"LOW\";\nlet zone = meta.location?.zone ?? \"Lab-Edinburgh\";\nlet tsISO = meta.timestamp?.iso8601 ?? new Date().toISOString();\n\nlet ledMode = led.mode ?? \"PULSE\";\nlet ledColor = JSON.stringify(led.colorRGB ?? [0, 255, 0]);\n\nlet wifiOK = (wifi.mqttConnected === false) ? \"OFFLINE\" : \"ONLINE\";\nlet rssi = (wifi.rssiDbm !== undefined) ? (wifi.rssiDbm + \" dBm\") : \"-\";\nlet ip = wifi.localIp ?? \"192.168.4.x\";\n\n// Build pretty multi-line string with <br>\nlet html =\n    \"SYSTEM MODE: \" + safetyState + \"<br>\" +\n    new Date(tsISO).toLocaleString() + \"<br>\" +\n    \"LIVE TELEMETRY<br>\" +\n    \"T: \" + tempVal + \" °C  |  H: \" + humVal + \" %<br>\" +\n    \"Dew Pt: \" + dewVal + \" °C<br>\" +\n    \"LED: \" + ledMode + \" \" + ledColor + \"<br>\" +\n    \"EDGE NODE: \" + wifiOK + \"<br>\" +\n    \"Wi-Fi RSSI: \" + rssi + \"<br>\" +\n    \"IP: \" + ip + \"<br>\" +\n    \"Zone: \" + zone + \"<br>\" +\n    \"Risk: \" + complianceRisk;\n\nmsg.payload = { overview: html };\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 460,
+        "y": 220,
+        "wires": [
+            [
+                "ui_overview"
+            ]
+        ],
+        "outputLabels": [
+            "System Overview"
+        ]
+    },
+    {
+        "id": "ui_overview",
+        "type": "ui_template",
+        "z": "tab_b31ot_main",
+        "group": "group_overview",
+        "name": "System Overview Card",
+        "order": 1,
+        "width": 12,
+        "height": 6,
+        "format": "<div\n    style=\"background:#1a1a1a;color:#00ff9c;font-family:monospace;padding:12px;border-radius:4px;font-size:13px;line-height:1.4;white-space:normal;\">\n    <div style=\"color:#ffffff;font-weight:bold;margin-bottom:6px;font-size:14px;\">SYSTEM OVERVIEW</div>\n    <div style=\"color:#00ff9c;\" ng-bind-html=\"msg.payload.overview\"></div>\n</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": false,
+        "templateScope": "local",
+        "className": "",
+        "x": 780,
+        "y": 220,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "fx_build_compliance",
+        "type": "function",
+        "z": "tab_b31ot_main",
+        "name": "Build Compliance Block",
+        "func": "// Build the Safety / Compliance Control status bar section\nlet comp = msg.payload?.analytics?.compliance || {};\nlet lastCause = comp.lastCause || \"Normal\";\nlet risk = comp.complianceRisk || \"-\";\nlet state = comp.autoSafetyState || \"-\";\nlet ts = comp.since || new Date().toISOString();\n\nmsg.payload = {\n  state: state,\n  risk: risk,\n  last: lastCause,\n  ts: ts\n};\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 470,
+        "y": 280,
+        "wires": [
+            [
+                "ui_compliance"
+            ]
+        ]
+    },
+    {
+        "id": "ui_compliance",
+        "type": "ui_template",
+        "z": "tab_b31ot_main",
+        "group": "group_safety",
+        "name": "Safety / Compliance Card",
+        "order": 1,
+        "width": 12,
+        "height": 4,
+        "format": "<div style=\"background:#111;color:#fff;font-family:'Roboto',sans-serif;border-radius:4px;padding:12px;font-size:14px;line-height:1.5;\">\n  <div style=\"font-weight:bold;color:#4fc3f7;margin-bottom:8px;font-size:15px;\">SAFETY / COMPLIANCE CONTROL</div>\n  <div style=\"display:flex;flex-wrap:wrap;justify-content:space-between;background:#222;padding:10px;border-radius:4px;font-size:13px;line-height:1.4;\">\n    <div style=\"flex:1;min-width:140px;padding:4px 8px;\">\n      <div style=\"color:#999;font-size:11px;\">AUTO SAFETY STATE</div>\n      <div style=\"color:#00e676;font-weight:bold;font-size:14px;\">{{msg.payload.state}}</div>\n    </div>\n    <div style=\"flex:1;min-width:140px;padding:4px 8px;\">\n      <div style=\"color:#999;font-size:11px;\">COMPLIANCE RISK</div>\n      <div style=\"color:#00e5ff;font-weight:bold;font-size:14px;\">{{msg.payload.risk}}</div>\n    </div>\n    <div style=\"flex:1;min-width:140px;padding:4px 8px;\">\n      <div style=\"color:#999;font-size:11px;\">TIMESTAMP</div>\n      <div style=\"color:#fff;font-weight:bold;font-size:14px;\">{{msg.payload.ts}}</div>\n    </div>\n    <div style=\"flex:1;min-width:140px;padding:4px 8px;\">\n      <div style=\"color:#999;font-size:11px;\">LAST CAUSE</div>\n      <div style=\"color:#fff;font-weight:bold;font-size:14px;\">{{msg.payload.last}}</div>\n    </div>\n  </div>\n  <div style=\"margin-top:12px;font-size:12px;color:#bbb;\">Automatic Safety Trigger: <span style=\"color:#00e676;font-weight:bold;\">ACTIVE</span> &nbsp;&nbsp;|&nbsp;&nbsp; Manual Alarm Override below sends command to ESP32.</div>\n</div>",
+        "x": 790,
+        "y": 280,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "sw_manual_override",
+        "type": "ui_switch",
+        "z": "tab_b31ot_main",
+        "name": "Manual Alarm Override",
+        "label": "Manual Alarm Override (Send to ESP32)",
+        "tooltip": "",
+        "group": "group_safety",
+        "order": 2,
+        "width": 8,
+        "height": 1,
+        "passthru": true,
+        "decouple": "false",
+        "topic": "",
+        "topicType": "str",
+        "style": "",
+        "onvalue": "true",
+        "onvalueType": "bool",
+        "onicon": "",
+        "oncolor": "",
+        "offvalue": "false",
+        "offvalueType": "bool",
+        "officon": "",
+        "offcolor": "",
+        "animate": true,
+        "className": "",
+        "x": 240,
+        "y": 580,
+        "wires": [
+            [
+                "fx_build_cmd"
+            ]
+        ]
+    },
+    {
+        "id": "fx_build_cmd",
+        "type": "function",
+        "z": "tab_b31ot_main",
+        "name": "Build Control JSON for ESP32",
+        "func": "// msg.payload is boolean from ui_switch (true/false)\nlet override = msg.payload === true;\n\nmsg.payload = {\n    \"manualOverride\": override\n};\n\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 530,
+        "y": 580,
+        "wires": [
+            [
+                "mqtt_out_cmd"
+            ]
+        ]
+    },
+    {
+        "id": "mqtt_out_cmd",
+        "type": "mqtt out",
+        "z": "tab_b31ot_main",
+        "name": "MQTT – ESP32 Command",
+        "topic": "iot/esp32-dht01/cmd",
+        "qos": "",
+        "retain": "",
+        "broker": "broker_main",
+        "x": 800,
+        "y": 580,
+        "wires": []
+    },
+    {
+        "id": "fx_build_eventlog",
+        "type": "function",
+        "z": "tab_b31ot_main",
+        "name": "Build Event Log Line",
+        "func": "// Grab anomaly / compliance / last command info for audit trail style log.\nlet a = msg.payload?.analytics?.anomaly || {};\nlet comp = msg.payload?.analytics?.compliance || {};\nlet ts = msg.payload?.meta?.timestamp?.iso8601 || new Date().toISOString();\n\nlet line = ts + \" | STATE=\" + (comp.autoSafetyState||\"?\") +\n           \" | RISK=\" + (comp.complianceRisk||\"?\") +\n           \" | ANOMALY=\" + (a.isAnomaly?\"YES\":\"NO\") +\n           (a.isAnomaly? (\" type=\"+(a.anomalyType||\"?\")) : \"\") ;\n\nmsg.payload = line;\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 470,
+        "y": 420,
+        "wires": [
+            [
+                "ui_eventlog"
+            ]
+        ]
+    },
+    {
+        "id": "ui_eventlog",
+        "type": "ui_text",
+        "z": "tab_b31ot_main",
+        "group": "group_events",
+        "order": 1,
+        "width": 12,
+        "height": 2,
+        "name": "Event Log / Traceability",
+        "label": "EVENT LOG (latest)",
+        "format": "{{msg.payload}}",
+        "layout": "row-spread",
+        "x": 790,
+        "y": 420,
+        "wires": []
+    },
+    {
+        "id": "g_temp",
+        "type": "ui_gauge",
+        "z": "tab_b31ot_main",
+        "name": "Gauge Temp",
+        "group": "group_env",
+        "order": 1,
+        "width": 4,
+        "height": 4,
+        "gtype": "gage",
+        "title": "Temperature (°C)",
+        "label": "°C",
+        "format": "{{value}}",
+        "min": 0,
+        "max": 50,
+        "colors": [
+            "#00e676",
+            "#ffeb3b",
+            "#f44336"
+        ],
+        "seg1": "",
+        "seg2": "",
+        "className": "",
+        "x": 750,
+        "y": 80,
+        "wires": []
+    },
+    {
+        "id": "g_hum",
+        "type": "ui_gauge",
+        "z": "tab_b31ot_main",
+        "name": "Gauge Humidity",
+        "group": "group_env",
+        "order": 2,
+        "width": 4,
+        "height": 4,
+        "gtype": "gage",
+        "title": "Humidity (%)",
+        "label": "%",
+        "format": "{{value}}",
+        "min": 0,
+        "max": 100,
+        "colors": [
+            "#4fc3f7",
+            "#ffeb3b",
+            "#ff5722"
+        ],
+        "seg1": "",
+        "seg2": "",
+        "className": "",
+        "x": 760,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "g_dew",
+        "type": "ui_gauge",
+        "z": "tab_b31ot_main",
+        "name": "Gauge Dew Point",
+        "group": "group_env",
+        "order": 3,
+        "width": 4,
+        "height": 4,
+        "gtype": "gage",
+        "title": "Dew Point (°C)",
+        "label": "°C",
+        "format": "{{value}}",
+        "min": -10,
+        "max": 40,
+        "colors": [
+            "#8bc34a",
+            "#ffc107",
+            "#f44336"
+        ],
+        "seg1": "",
+        "seg2": "",
+        "className": "",
+        "x": 770,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "chart_trend",
+        "type": "ui_chart",
+        "z": "tab_b31ot_main",
+        "name": "Trend Analytics (Last 40 Samples)",
+        "group": "group_trends",
+        "order": 1,
+        "width": 12,
+        "height": 6,
+        "label": "Environment Telemetry History",
+        "chartType": "line",
+        "legend": "true",
+        "xformat": "HH:mm:ss",
+        "interpolate": "linear",
+        "nodata": "Waiting for data...",
+        "dot": true,
+        "ymin": "0",
+        "ymax": "100",
+        "removeOlder": "1",
+        "removeOlderPoints": "200",
+        "removeOlderUnit": "3600",
+        "cutout": "",
+        "useOneColor": false,
+        "useUTC": false,
+        "colors": [
+            "#ff9800",
+            "#2196f3",
+            "#4caf50",
+            "#e91e63",
+            "#9c27b0",
+            "#009688",
+            "#000000",
+            "#000000",
+            "#000000"
+        ],
+        "outputs": 1,
+        "useDifferentColor": false,
+        "className": "",
+        "x": 820,
+        "y": 340,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "broker_main",
+        "type": "mqtt-broker",
+        "name": "Public Mosquitto",
+        "broker": "test.mosquitto.org",
+        "port": "1883",
+        "clientid": "HWU_Node_Dashboard",
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true
+    },
+    {
+        "id": "group_overview",
+        "type": "ui_group",
+        "name": "System Overview",
+        "tab": "tab_hwu",
+        "order": 1,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "group_safety",
+        "type": "ui_group",
+        "name": "Safety / Compliance Control",
+        "tab": "tab_hwu",
+        "order": 3,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "group_events",
+        "type": "ui_group",
+        "name": "Event Log / Traceability",
+        "tab": "tab_hwu",
+        "order": 5,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "group_env",
+        "type": "ui_group",
+        "name": "Environment Telemetry",
+        "tab": "tab_hwu",
+        "order": 2,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "group_trends",
+        "type": "ui_group",
+        "name": "Trend Analytics (Last 40 Samples)",
+        "tab": "tab_hwu",
+        "order": 4,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "tab_hwu",
+        "type": "ui_tab",
+        "name": "Heriot-Watt | B31OT IoT Assignment",
+        "icon": "dashboard",
+        "disabled": false,
+        "hidden": false
+    },
+    {
+        "id": "80336380859b7e2c",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-dashboard": "3.6.6"
+        }
+    }
+]
